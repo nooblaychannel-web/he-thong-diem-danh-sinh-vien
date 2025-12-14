@@ -1,8 +1,11 @@
 import pandas as pd
 import streamlit as st
 from datetime import datetime
-from st_gsheets_connection import GSheetsConnection 
+import gspread 
+import json
 
+
+GOOGLE_SHEET_NAME = "Data Diem Danh" 
 
 SUBJECTS = [
     "Python",
@@ -13,27 +16,42 @@ SUBJECTS = [
     "Tiếng Anh chuyên ngành"
 ]
 
-
 WORKSHEET_NAME = "Sheet1" 
 
+
+conn = None 
+gc = None
+
 try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
+
+    secrets_dict = st.secrets["connections"]["gsheets"]["service_account_info"]
+    
+    gc = gspread.service_account_from_dict(json.loads(secrets_dict))
+    
+
+    spreadsheet = gc.open(GOOGLE_SHEET_NAME) 
+    
+
+    worksheet = spreadsheet.worksheet(WORKSHEET_NAME) 
+    
+    st.session_state.worksheet = worksheet 
+    conn = True 
 except Exception as e:
-    st.error(f"Lỗi: Không thể khởi tạo kết nối GSheets. Kiểm tra lại file secrets.toml: {e}")
-    conn = None 
+    st.error(f"❌ Lỗi kết nối Google Sheet: {e}. Vui lòng kiểm tra Secrets, Tên file, và Quyền truy cập cho Service Account.")
+    st.stop() 
 
 def load_data(subject_name):
     """Đọc dữ liệu điểm danh hiện tại từ Google Sheet và thêm cột ngày hôm nay."""
     
-    if conn is None:
-        return pd.DataFrame() 
+    if conn is None or 'worksheet' not in st.session_state:
+        return None 
 
     st.info(f"Đang tải dữ liệu điểm danh môn: {subject_name}...")
     try:
+        records = st.session_state.worksheet.get_all_records()
+        df_all = pd.DataFrame(records)
         
-        df_all = conn.read(worksheet=WORKSHEET_NAME, usecols='A:ZZ')
         df_all = df_all.dropna(how="all") 
-        
         
         if df_all.empty or '__MÃ SV__' not in df_all.columns:
             st.warning("Google Sheet trống hoặc không tìm thấy cột '__MÃ SV__'. Ứng dụng sẽ dừng.")
@@ -41,7 +59,6 @@ def load_data(subject_name):
 
         df = df_all[['__HỌ TÊN__', '__MÃ SV__']].copy()
         
-
         for col in df_all.columns:
             if col not in df.columns: 
                 df[col] = df_all[col].apply(lambda x: str(x).upper() == "X") 
@@ -60,24 +77,24 @@ def load_data(subject_name):
 def save_attendance(df_updated):
     """Ghi toàn bộ DataFrame điểm danh đã cập nhật vào Google Sheet."""
     
-    if conn is None:
-        st.error("Lưu thất bại: Kết nối GSheets không khả dụng.")
+    if conn is None or 'worksheet' not in st.session_state:
+        st.error("Lưu thất bại: Worksheet không khả dụng.")
         return
 
     try:
-
         df_to_save = df_updated.copy()
         for col in df_to_save.columns[2:]: 
             df_to_save[col] = df_to_save[col].apply(lambda x: "X" if x else "")
+            
+        data_to_write = [df_to_save.columns.values.tolist()] + df_to_save.values.tolist()
 
-        conn.write(df=df_to_save, worksheet=WORKSHEET_NAME)
+        st.session_state.worksheet.update('A1', data_to_write)
         
         st.session_state.df = df_updated 
-        st.success("✅ Lưu điểm danh thành công vào Google Sheet!")
+        st.success("✅ Lưu điểm danh thành công vào Google Sheet (qua gspread)!")
     except Exception as e:
         st.error(f"❌ Lỗi khi ghi vào Google Sheet: {e}. Lỗi có thể do giới hạn quyền hoặc lỗi cấu hình.")
         st.exception(e)
-
 
 
 def attendance_report(df):
@@ -129,12 +146,11 @@ def main():
         with st.form(key="attendance_form"):
             st.write("### Bảng điểm danh (Cần nhấn 'Lưu' để cập nhật lên Google Sheets)")
             
-
+            
             if 'df' not in st.session_state or st.session_state.df.empty:
                  st.warning("Chưa có dữ liệu sinh viên để hiển thị.")
                  st.stop()
                  
-
             today_col = st.session_state.df.columns[-1]
             disabled_cols = st.session_state.df.columns[:-1].tolist()
             
