@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime
 import gspread 
 import json
-
+import os
 
 GOOGLE_SHEET_NAME = "Data Diem Danh" 
 
@@ -22,23 +22,42 @@ WORKSHEET_NAME = "Sheet1"
 conn = None 
 gc = None
 
+conn = None 
+gc = None
+
 try:
-
-    secrets_dict = st.secrets["connections"]["gsheets"]["service_account_info"]
+    # 1. ĐỌC CHUỖI KEY NÉN TỪ BIẾN MÔI TRƯỜNG
+    # Tên biến môi trường đã đặt trong Streamlit Secrets
+    KEY_ENV_NAME = "GCP_SERVICE_ACCOUNT_KEY"
     
-    gc = gspread.service_account_from_dict(json.loads(secrets_dict))
-    
+    if KEY_ENV_NAME not in os.environ:
+        st.error(f"❌ Lỗi cấu hình: Không tìm thấy biến môi trường {KEY_ENV_NAME}. Vui lòng kiểm tra Secrets.")
+        st.stop()
 
+    # 2. TẢI CHUỖI JSON NÉN THÀNH DICT PYTHON
+    # Key được nén 1 dòng nên không cần xử lý ký tự đặc biệt
+    service_account_info_dict = json.loads(os.environ[KEY_ENV_NAME])
+
+    # 3. KẾT NỐI GSPREAD
+    gc = gspread.service_account_from_dict(service_account_info_dict)
+    
+    # 4. MỞ SHEET VÀ WORKSHEET
     spreadsheet = gc.open(GOOGLE_SHEET_NAME) 
-    
-
     worksheet = spreadsheet.worksheet(WORKSHEET_NAME) 
     
     st.session_state.worksheet = worksheet 
     conn = True 
+
+except json.JSONDecodeError:
+    st.error("❌ Lỗi kết nối Google Sheet: Key JSON trong biến môi trường bị hỏng hoặc chưa được nén đúng.")
+    st.stop()
+except gspread.exceptions.SpreadsheetNotFound:
+    st.error(f"❌ Lỗi: Không tìm thấy Google Sheet có tên '{GOOGLE_SHEET_NAME}'.")
+    st.stop()
 except Exception as e:
-    st.error(f"❌ Lỗi kết nối Google Sheet: {e}. Vui lòng kiểm tra Secrets, Tên file, và Quyền truy cập cho Service Account.")
-    st.stop() 
+    # Bắt các lỗi kết nối/quyền truy cập khác
+    st.error(f"❌ Lỗi kết nối Google Sheet (Gspread Error): {e}. Vui lòng kiểm tra Quyền truy cập cho Service Account.")
+    st.stop()
 
 def load_data(subject_name):
     """Đọc dữ liệu điểm danh hiện tại từ Google Sheet và thêm cột ngày hôm nay."""
